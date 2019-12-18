@@ -22,7 +22,6 @@ class Evaluator():
             sample_num = preds.size(0)
 
             _, pred_labels = preds.max(dim=1)
-            #print('pred_labels_size:{}'.format(pred_labels.size()))
             all_acc += int((pred_labels==labels).sum())
             count += sample_num
 

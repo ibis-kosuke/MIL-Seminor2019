@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument('--out_dir', default='/data/unagi0/ktokitake/cifar100')
     parser.add_argument('--expt_dir', default='expt')
     parser.add_argument('--writer_dir', default='tensorboard')
-    parser.add_argument('--data_dir', default='/data/unagi0/cifar/cifar-100-python')
+    parser.add_argument('--data_dir', default='/data/unagi0/ktokitake/cifar100/data')
     parser.add_argument('--lr', type=float, default=0.002)
     #parser.add_argument('')
 
@@ -32,11 +32,13 @@ def parse_args():
 
     return args
 
+'''
 def plot_losses(losses):
     steps = np.arange(len(losses))
     plt.plot(steps, losses, label='losses')
     plt.legend()
     plt.show()
+'''
 
 
 def set_vggcfg():
@@ -46,14 +48,11 @@ def set_vggcfg():
 
 
 if __name__=='__main__':
-
     opt = parse_args()
     
     if opt.is_training:
-        opt.split = 'train'
         opt.shuffle = True
     else:
-        opt.split = 'test'
         opt.shuffle = False
 
 
@@ -64,33 +63,40 @@ if __name__=='__main__':
         transforms.ToTensor(),
         transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))])
     
-    dataset = CifarDataset(transform, opt.split, opt.data_dir)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=opt.shuffle, num_workers =2)
+    train_dataset = CifarDataset(transform, 'train', opt.data_dir)
+    val_dataset = CifarDataset(transform, 'val', opt.data_dir)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=opt.shuffle, num_workers =2)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=opt.batch_size, shuffle=opt.shuffle, num_workers =2)
 
+    #define model
     vggcfg = set_vggcfg()
     model = VGGnet(vggcfg)
     
     if opt.is_training:
-        model.train()
         if torch.cuda.is_available():
             model.cuda()
 
-        #Tensorboard writer 
+        #set Tensorboard writer 
         writer_path = os.path.join(opt.out_dir,opt.expt_dir, opt.writer_dir)
         writer = SummaryWriter(writer_path)
 
+        #set criterion, optimizer
         criterion = nn.CrossEntropyLoss()
         optim = optim.Adam(model.parameters(), lr=opt.lr, betas=(0.9,0.999)) 
 
         #acrtivates --> cross_entropy 
-        trainer = Trainer(opt, dataset, writer)
-        training_losses = trainer.train(dataloader, model, optim, criterion)
+        trainer = Trainer(opt, train_dataset, val_dataset, writer)
+        train_losses, val_losses = trainer.train(train_loader, val_loader, model, optim, criterion)
 
-        pkl_path = os.path.join(opt.out_dir, opt.expt_dir, 'train_losses.pkl')
-        with open(pkl_path, 'wb') as f:
-            pkl.dump(training_losses, f)
+
+        train_loss_path = os.path.join(opt.out_dir, opt.expt_dir, 'train_losses.pkl')
+        val_loss_path = os.path.join(opt.out_dir, opt.expt_dir, 'val_losses.pkl')
+        with open(train_loss_path, 'wb') as f, open(val_loss_path, 'wb') as g:
+            pkl.dump(train_losses, f)
+            pkl.dump(val_losses, g)
 
         #plot_losses(training_losses)
+
 
     #######Test######
     else:
@@ -99,10 +105,13 @@ if __name__=='__main__':
 
         state_dict = torch.load(model_path, map_location=lambda storage, loc: storage)
         model.load_state_dict(state_dict)
-        if torch.cuda.is_available():
-            model.cuda()            
-        model.eval()
 
-        evaluator = Evaluator(opt, dataset)
-        evaluator.evaluate(dataloader, model)
+        if torch.cuda.is_available():
+            model.cuda()       
+
+        test_dataset = CifarDataset(transform, 'test', opt.data_dir)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=opt.shuffle, num_workers =2)     
+        
+        evaluator = Evaluator(opt, test_dataset)
+        evaluator.evaluate(test_loader, model)
     
