@@ -14,7 +14,9 @@ class Trainer():
         self.val_iter_num = round(len(val_dataset)/ opt.batch_size)
         self.train_losses = []
         self.val_losses = []
+        self.val_accs = []
         self.writer=writer
+        self.device=opt.device
         
     def train_epoch(self, epoch, dataloader, model, optimizer, criterion):
         print('Training step')
@@ -30,8 +32,10 @@ class Trainer():
             #imgs: batch x Ch x hight x width
             fnames, labels, imgs = data_iter.next()
             if torch.cuda.is_available():
-                labels = labels.cuda()
-                imgs = imgs.cuda()
+                labels = labels.cuda(device=self.device)
+                imgs = imgs.cuda(device=self.device)
+                #print('labels device:{}'.format(labels.device))
+                #print('imgs device:{}'.format(imgs.device))
                 
             preds = model(imgs)
                 
@@ -71,8 +75,8 @@ class Trainer():
         for i in range(self.val_iter_num):
             fnames, labels, imgs = data_iter.next()
             if torch.cuda.is_available():
-                    labels = labels.cuda()
-                    imgs = imgs.cuda()
+                    labels = labels.cuda(device=self.device)
+                    imgs = imgs.cuda(device=self.device)
 
             preds = model(imgs)
             loss = criterion(preds, labels)
@@ -84,9 +88,11 @@ class Trainer():
             count += sample_num
 
         self.val_losses.append(all_loss)
+        self.val_accs.append(all_acc / count)
         print('val_accuracy: {}'.format(all_acc / count))
         print('val_loss:{}\n'.format(all_loss / count))
 
+        '''
         if self.writer is not None:
             self.writer.add_scalars('Train_Val_loss',
                                     {'train_loss' : train_loss,
@@ -94,24 +100,26 @@ class Trainer():
 
             #self.writer.add_scalar('Val_loss', all_loss/ count, epoch+1)
             self.writer.add_scalar('Val_acc', all_acc/ count, epoch+1)
+        '''
 
 
-    def train(self, train_loader, val_loader, model, optimizer, criterion):
+
+    def train(self, trial, train_loader, val_loader, model, optimizer, criterion):
         for epoch in range(self.epoch):
-            print('Epoch: %d' % (epoch+1))
+            print('Epoch: %d/%d' % (epoch+1, self.epoch))
             train_loss=self.train_epoch(epoch, train_loader, model, optimizer, criterion)
             self.val_epoch(epoch, val_loader, model, criterion, train_loss)
 
 
-        save_dir = os.path.join(self.out_dir, self.expt_dir)
+        save_dir = os.path.join(self.out_dir, self.expt_dir, 'model')
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
         print('Finished Training')
         print('saving model to {}'.format(save_dir))
         
-        model_path = os.path.join(save_dir,'VGGnet.pth')
+        model_path = os.path.join(save_dir,'trial{}_VGGnet.pth'.format(trial.number))
         torch.save(model.state_dict(), model_path)
 
-        return self.train_losses, self.val_losses
+        return self.train_losses, self.val_losses, self.val_accs
 

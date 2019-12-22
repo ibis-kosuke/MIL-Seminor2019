@@ -9,6 +9,7 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle as pkl
+import optuna
 
 from trainer import Trainer 
 from data import CifarDataset
@@ -26,6 +27,8 @@ def parse_args():
     parser.add_argument('--writer_dir', default='tensorboard')
     parser.add_argument('--data_dir', default='/data/unagi0/ktokitake/cifar100/data')
     parser.add_argument('--lr', type=float, default=0.002)
+    parser.add_argument('--cuda_ids', type=str, default='-1') ###
+    parser.add_argument('--manual_seed', type=str)
     #parser.add_argument('')
 
     args = parser.parse_args()
@@ -47,14 +50,29 @@ def set_vggcfg():
     return vggcfg
 
 
-if __name__=='__main__':
+def train_val(opt):
     opt = parse_args()
     
     if opt.is_training:
         opt.shuffle = True
+        opt.manual_seed = random.randint(0,10000)
+        
     else:
         opt.shuffle = False
+        opt.manual_seed = 100
 
+    random.seed(opt.manual_seed)
+    np.random.seed(opt.manual_seed)
+    torch.manual_seed(opt.manual_seed)
+
+    if opt.cuda_ids != '-1':
+        torch.cuda.manual_seed_all(opt.manual_seed)
+        opt.cuda_list = [int(gpu_id) for gpu_id in opt.cuda_ids.split(',')]
+        os.environ['CUDA_VISIBLE_DEVICES'] = opt.cuda_ids #make sense?
+        #print('Available GPUs num:{}'.format(torch.cuda.device_count()))
+
+    device = torch.device('cuda:%s'% str(opt.cuda_list[0]) if torch.cuda.is_available() else 'cpu')
+    opt.device=device
 
     #######Training#######
     #ToTensor: (hight x width x ch) to (ch x hight x width)  &  0~255 to 0~1
@@ -69,12 +87,16 @@ if __name__=='__main__':
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=opt.batch_size, shuffle=opt.shuffle, num_workers =2)
 
     #define model
-    vggcfg = set_vggcfg()
-    model = VGGnet(vggcfg)
+    #vggcfg = set_vggcfg()
+    #model = VGGnet(vggcfg)####
+    
     
     if opt.is_training:
         if torch.cuda.is_available():
-            model.cuda()
+            model.cuda(device=device)
+        if len(opt.cuda_list) > 1:
+            model = nn.DataParallel(model, opt.cuda_list)
+            model.to(device)
 
         #set Tensorboard writer 
         writer_path = os.path.join(opt.out_dir,opt.expt_dir, opt.writer_dir)
@@ -98,6 +120,7 @@ if __name__=='__main__':
         #plot_losses(training_losses)
 
 
+def test(opt):
     #######Test######
     else:
         model_path = os.path.join(opt.out_dir, opt.expt_dir, 'VGGnet.pth')
@@ -107,11 +130,59 @@ if __name__=='__main__':
         model.load_state_dict(state_dict)
 
         if torch.cuda.is_available():
-            model.cuda()       
+            model.cuda(device=device)       
 
         test_dataset = CifarDataset(transform, 'test', opt.data_dir)
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=opt.shuffle, num_workers =2)     
         
         evaluator = Evaluator(opt, test_dataset)
         evaluator.evaluate(test_loader, model)
+
+
+def suggest_optimizer(trial, model):
+    optim_str = trial.suggest_categorical('optimizer', ['Adam', 'MomentumSGD'])
+    weight_decay = trial.suggest_loguniform('weight_decay', 1e-10, 1e-3)
+    
+    if optim_str == 'Adam':
+        adam_lr = trial.suggest_loguniform('adam_lr', 1e-5, 1e-1)
+        optim = torch.optim.Adam(model.parameters(), lr=adam_lr, weight_decay=weight_decay)
+    
+    else:
+        sgd_lr = trial.suggest_loguniform('sgd_lr', 1e-5, 1e-1)
+        optim = torch.optim.SGD(model.parameters(), lr=sgd_lr, momentum=0.9,
+                                    weight_decay=weight_decay)
+
+    return optim
+
+
+
+def objective(trial):
+    '''
+    mean = trial.suggest_uniform('mean', 1e-10, 1)
+    var = trial.suggest_uniform('val', 1e-10, 1)
+    '''
+
+    #TODO transform, model などの定義はここでやってしまっておく。
+
+    vggcfg = set_vggcfg()
+    model = VGGnet(vggcfg)#
+
+    optim = suggest_optimizer(trial, model)
+
+    
+
+
+if __name__ =='__main__':
+    opt = parse_args()
+
+    study = optuna.create_study()
+    study.optimize(objective, n_trial=100)
+
+    
+
+
+    
+
+
+
     
